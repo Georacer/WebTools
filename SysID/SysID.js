@@ -111,6 +111,38 @@ function getBounds(numParams) {
     return ans;
 }
 
+// Angle for the gravity term of an output, in degrees, on the time base of the
+// output samples. ANG carries the attitude at the loop rate and ATT at 10 Hz,
+// so ANG is used when the log has it. The angle is interpolated in time, so
+// the two messages need not share a sample rate.
+function gravityAngle(parser, axis, t_out_us) {
+    const name = ("ANG" in parser.messageTypes) ? "ANG" : "ATT"
+    const t_us = parser.get(name, "TimeUS")
+    const angle = parser.get(name, axis)
+    if ((t_us == null) || (angle == null)) {
+        throw new Error("Gravity compensation needs " + axis + " in ANG or ATT")
+    }
+    console.log("gravity term from ", name, " at ", (t_us.length - 1) * 1e6 / (t_us[t_us.length - 1] - t_us[0]), " Hz")
+    const len = t_out_us.length
+    const ret = new Array(len)
+    let k = 0
+    for (let j = 0; j < len; j++) {
+        const t = t_out_us[j]
+        while ((k < t_us.length - 2) && (t_us[k + 1] < t)) {
+            k++
+        }
+        if (t <= t_us[0]) {
+            ret[j] = angle[0]
+        } else if (t >= t_us[t_us.length - 1]) {
+            ret[j] = angle[t_us.length - 1]
+        } else {
+            const frac = (t - t_us[k]) / (t_us[k + 1] - t_us[k])
+            ret[j] = angle[k] + frac * (angle[k + 1] - angle[k])
+        }
+    }
+    return ret
+}
+
 // Find the index in the array with value closest to the target
 // If two values are the same the first will be returned
 function nearestIndex(arr, target) {
@@ -444,27 +476,20 @@ async function run_transfer_function_ID(parser) {
     }
 
     if (outputValues.compensations[0]) {
-        const ATT_t_data = parser.get("ATT", "TimeUS")
-
-        const att_ind1 = nearestIndex(ATT_t_data, t_start*1000000)
-        const att_ind2 = nearestIndex(ATT_t_data, t_end*1000000)
         let mult = 1
         if (outputValues.multipliers[0]) {
             mult = parseFloat(outputValues.multipliers[0])
         }
-        let ang_data = parser.get("ATT", outputValues.compensations[0])
-        ang_data_arr = Array.from(ang_data)
-        ang_data_arr.slice(att_ind1, att_ind2)
-        console.log("data field ", outputValues.compensations[0], " pre slicing size: ", outputData.length)
+        const ang_data_arr = gravityAngle(parser, outputValues.compensations[0], Array.from(t_data).slice(ind1_d, ind2_d))
         const G = 9.81
         if (outputValues.compensations[0] == "Roll") {
             for (let j = 0; j < outputData.length; j++) {
-                outputData[j] = outputData[j] + (Math.PI/180) * mult * G * ang_data_arr[att_ind1 + j]
+                outputData[j] = outputData[j] + (Math.PI/180) * mult * G * ang_data_arr[j]
             }
         }
         if (outputValues.compensations[0] == "Pitch") {
             for (let j = 0; j < outputData.length; j++) {
-                outputData[j] = outputData[j] - (Math.PI/180) * mult * G *ang_data_arr[att_ind1 + j]
+                outputData[j] = outputData[j] - (Math.PI/180) * mult * G * ang_data_arr[j]
             }
         }
 
@@ -709,29 +734,20 @@ async function run_SS_ID(parser) {
         }
 
         if (outputValues.compensations[i]) {
-            const ATT_t_data = parser.get("ATT", "TimeUS")
-
-            const att_ind1 = nearestIndex(ATT_t_data, t_start_ss*1000000)
-            const att_ind2 = nearestIndex(ATT_t_data, t_end_ss*1000000)
             let mult = 1
             if (outputValues.multipliers[i]) {
                 mult = parseFloat(outputValues.multipliers[i])
             }
-            let ang_data = parser.get("ATT", outputValues.compensations[i])
-            ang_data_arr = Array.from(ang_data)
-            ang_data_arr.slice(att_ind1, att_ind2)
-            console.log("data field ", outputValues.compensations[i], " pre slicing size: ", data_arr.length)
+            const ang_data_arr = gravityAngle(parser, outputValues.compensations[i], Array.from(t_data).slice(ind1_d, ind2_d))
             const G = 9.81
             if (outputValues.compensations[i] == "Roll") {
                 for (let j = 0; j < data_arr.length; j++) {
-                    temp_data = data_arr[j]
-                    data_arr[j] = data_arr[j] + (Math.PI/180) * mult * G * ang_data_arr[att_ind1 + j]
+                    data_arr[j] = data_arr[j] + (Math.PI/180) * mult * G * ang_data_arr[j]
                 }
             }
             if (outputValues.compensations[i] == "Pitch") {
                 for (let j = 0; j < data_arr.length; j++) {
-                    temp_data = data_arr[j]
-                    data_arr[j] = data_arr[j] - (Math.PI/180) * mult * G * ang_data_arr[att_ind1 + j]
+                    data_arr[j] = data_arr[j] - (Math.PI/180) * mult * G * ang_data_arr[j]
                 }
             }
 
